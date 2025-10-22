@@ -235,7 +235,7 @@ current_block="$(awk -v begin="$BEGIN_LINE" -v end="$END_LINE" '
 
 if [[ -n "$current_block" ]]; then
   echo "Existing managed block found:"
-  echo "$current_block" | sed 's/^/  /'
+  printf '%s\n' "${current_block//$'\n'/$'\n'  }"
 else
   echo "No existing managed block for this key."
 fi
