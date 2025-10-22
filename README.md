@@ -1,113 +1,138 @@
 # 1Password SSH Tools
 
-Helper scripts for managing SSH keys using the [1Password CLI](https://developer.1password.com/docs/cli/).  
-These scripts make it easier to create, view, and manage SSH keys stored in 1Password — including optional integration with the 1Password SSH agent (`agent.toml`).
+A lightweight toolkit to integrate **1Password SSH Agent** with local SSH configuration on macOS and Linux.  
+These tools automate key creation, publication, and configuration file management for a seamless `ssh` workflow.
 
 ---
 
-## 🧰 Included Tools
+## 🚀 Overview
 
-### `op-gen-ssh-pubonly.sh`
-Creates or reuses SSH keys directly in 1Password, and (optionally) updates your local 1Password SSH Agent configuration file.
+This repository contains helper scripts designed to simplify managing SSH keys stored in **1Password**.
 
-**Capabilities:**
-- Searches for existing SSH key records by host and user.
-- Creates new keys in 1Password if none are found.
-- Copies the public key to clipboard for manual installation on the target host.
-- (Optionally) inserts or updates the key in your `~/.config/1Password/ssh/agent.toml`.
+| Script | Description |
+|---------|--------------|
+| `scripts/op-ssh-keygen.sh` | Generates or retrieves SSH key pairs in 1Password and exports public keys locally. |
+| `scripts/op-ssh-status.sh` | Displays local SSH configuration, key fingerprints, and 1Password matches. |
+| `scripts/op-ssh-show-pubkey.sh` | Quickly retrieves and displays public keys stored in 1Password. |
+| `scripts/op-ssh-addhost.sh` *(coming soon)* | Creates or reuses 1Password SSH keys, validates local public keys, and updates your SSH config file. |
 
----
-
-### `op-show-ssh-pub.sh`
-Displays existing SSH keys stored in 1Password — including their public keys — and copies the selected public key to the clipboard.
-
-**Useful for:**
-- Quickly retrieving keys to add to remote hosts.
-- Verifying which SSH keys are already stored in 1Password.
+All scripts are written for **macOS’s native Bash 3.2** for maximum portability.
 
 ---
 
-## 🧭 Installation
+## 🧩 Script Summaries
 
-1. Clone this repository:
-   ```bash
-   git clone git@github.com:gunnjr/1p-ssh-tools.git
-   cd 1p-ssh-tools
-   ```
+### 🔑 `op-ssh-keygen.sh`
+- Searches for an existing SSH key in 1Password (by host or title pattern).  
+- If not found, creates a new Ed25519 key in 1Password.  
+- Exports the public key to a local `.pub` file under `~/.ssh`.  
+- Copies the key to clipboard for convenience.  
+- Optionally updates 1Password’s agent configuration (future enhancement).
 
-2. Make scripts executable:
-   ```bash
-   chmod +x op-*.sh
-   ```
+### 🧾 `op-ssh-status.sh`
+- Lists configured SSH hosts and corresponding local/public key files.  
+- Verifies if local key fingerprints match 1Password records.  
+- Detects missing or mismatched configuration and suggests fixes.  
+- Automatically signs into 1Password CLI if required.  
+- Output is formatted for readability in terminal tables.
 
-3. Move them somewhere on your `$PATH`, such as:
-   ```bash
-   mv op-*.sh ~/bin/
-   ```
+### 🧷 `op-ssh-show-pubkey.sh`
+- Simple utility to retrieve, display, and copy public keys from 1Password.  
+- Useful for quickly deploying keys to remote servers (e.g., `authorized_keys`).
+
+### 🧱 `op-ssh-addhost.sh` *(under development)*
+Planned functionality:
+- Checks for an existing SSH key in 1Password (creates one if missing).  
+- Validates or generates a matching local `.pub` file.  
+- Confirms the key pair matches between local and 1Password.  
+- Updates your SSH config with the proper `Host`, `IdentityFile`, and `IdentitiesOnly yes`.  
+- Optionally resolves local hostnames to IPs and creates alias blocks.  
+- Supports `--dry-run`, `--yes`, and `--auto-alias` modes.
 
 ---
 
-## 🧪 Usage
+## ⚙️ Requirements
 
-### Generate or Reuse a Key
+- **macOS or Linux**
+- **1Password CLI v2+**
+- **jq** — command-line JSON processor  
+- **ssh-keygen** — typically part of OpenSSH  
+- **Bash 3.2+ (macOS default)**
+
+Optional (for full compatibility testing):
+- `dig` or `ping` for hostname resolution
+
+To verify dependencies:
 ```bash
-op-gen-ssh-pubonly.sh --host example.com --user myuser
+for cmd in op jq ssh-keygen; do command -v $cmd >/dev/null || echo "Missing: $cmd"; done
 ```
 
-If a key already exists, you’ll be prompted to reuse it or create a new one.  
-When reusing, the public key will be displayed and copied to the clipboard.
+---
 
-### View a Stored Key
+## 🧰 Installation
+
+Clone this repo and install the scripts into your `~/bin` directory:
+
 ```bash
-op-show-ssh-pub.sh example.com
+git clone https://github.com/gunnjr/1p-ssh-tools.git ~/OneDrive/dev/1p-ssh-tools
+cd ~/OneDrive/dev/1p-ssh-tools
+mkdir -p ~/bin
+cp scripts/*.sh ~/bin/
+chmod +x ~/bin/op-ssh-*.sh
 ```
 
-Lists all matching keys and displays the selected one’s public key.
+Ensure your shell’s PATH includes `~/bin`:
+```bash
+export PATH="$HOME/bin:$PATH"
+```
 
 ---
 
-## ⚙️ 1Password SSH Agent Integration
+## 🧩 Example Workflow
 
-If you use the 1Password SSH Agent, your configuration file should live here:
+```bash
+# Generate or reuse an SSH key in 1Password and save public key locally
+scripts/op-ssh-keygen.sh --host github.com --user git
 
+# Add a host to SSH config using an existing key
+scripts/op-ssh-addhost.sh --host github.com --user git --pub-file ~/.ssh/github_ed25519.pub
+
+# Verify all SSH host/key configurations
+scripts/op-ssh-status.sh --all
+
+# Display public key for deployment
+scripts/op-ssh-show-pubkey.sh github.com
 ```
-~/.config/1Password/ssh/agent.toml
-```
-
-Each SSH key you want the agent to load should have an entry like this:
-
-```toml
-[[ssh-keys]]
-item = "SSH Key - example.com - myuser"
-vault = "Private"
-```
-
-> **Note:**  
-> The `allowed-hosts` directive is **not currently supported** by the 1Password SSH Agent and should not be used.
 
 ---
 
-## 💬 Disclaimer & Acknowledgement
+## 🔒 Security Notes
 
-> ⚠️ **Important Note from John Gunn**  
-> I’m just a weekend hacker who enjoys automating things.  
-> These scripts were created **with extensive help from ChatGPT** and reflect a collaborative learning process more than a polished product.  
->
-> Please treat them as such: they work for me, and they might work for you — but you use them at your own risk.  
->
-> I **welcome constructive feedback and contributions**, but please keep it respectful — especially regarding my reliance on ChatGPT.  
-> You get what you get. 🙂
+- All scripts interact **only** with your local 1Password CLI session.  
+- No secrets are logged, stored, or transmitted externally.  
+- When in doubt, run scripts in `--dry-run` mode to preview behavior.
 
 ---
 
-## 🧾 License
+## 🧠 Roadmap
 
-MIT License — see [`LICENSE`](LICENSE) for details.
+| Version | Milestone | Description |
+|----------|------------|-------------|
+| `v0.4-docs` | Documentation Refresh | Updated README, new structure, new naming convention |
+| `v0.5-addhost` | AddHost Integration | Full implementation of `op-ssh-addhost.sh` |
+| `v0.6-bootstrap` | Bootstrap Integration | Auto-deploy scripts to `~/bin` and integrate into bootstrap process |
 
 ---
 
-## 🙌 Acknowledgments
+## 💬 Disclaimer
 
-- [1Password Developer Docs](https://developer.1password.com/docs/ssh/)
-- [OpenSSH](https://www.openssh.com/)
-- And, of course, ChatGPT — for code scaffolding, debugging, and keeping the process fun.
+> I'm a weekend hacker — these tools were created and refined with heavy help from ChatGPT.  
+> They work great for me, but **you get what you get**.  
+> Constructive feedback and contributions are always welcome.  
+> Just please, no snark about AI-assisted development. 😉
+
+---
+
+## 📜 License
+
+MIT License © 2025 [John Gunn](https://github.com/gunnjr)
