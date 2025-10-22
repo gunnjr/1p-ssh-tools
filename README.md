@@ -129,7 +129,7 @@ scripts/op-ssh-show-pubkey.sh github.com
 > I'm a weekend hacker — these tools were created and refined with heavy help from ChatGPT.  
 > They work great for me, but **you get what you get**.  
 > Constructive feedback and contributions are always welcome.  
-> Just please, no snark about AI-assisted development. 😉
+> Just please, no snarking about AI-assisted development. 😉
 
 ---
 

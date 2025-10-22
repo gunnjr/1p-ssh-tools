@@ -49,13 +49,16 @@ need() { command -v "$1" >/dev/null 2>&1 || {
 	exit 127
 }; }
 
-need op
-need jq
-need ssh-keygen
-need awk
-need sed
-need grep
-need install
+# Skip dependency checks if in test mode
+if [ -z "${OPSSH_TEST_MODE:-}" ]; then
+	need op
+	need jq
+	need ssh-keygen
+	need awk
+	need sed
+	need grep
+	need install
+fi
 
 # -------------------------- Temp files (safe under -u) ------------------------
 TMPA="$(mktemp "${TMPDIR:-/tmp}/opsshA.XXXXXX" 2>/dev/null || mktemp -t opsshA.XXXXXX)"
@@ -69,6 +72,126 @@ if [ -z "${TMPA:-}" ] || [ -z "${TMPB:-}" ] || [ -z "${TBLK:-}" ]; then
 	echo "mktemp failed to create temporary files" >&2
 	exit 2
 fi
+
+# -------------------------- Function Definitions ------------------------------
+# -------------------------- 1Password sign-in ---------------------------------
+ensure_op() {
+	if op whoami >/dev/null 2>&1; then
+		return 0
+	fi
+	cat >&2 <<'MSG'
+1Password CLI: not signed in.
+
+Interactive sign-in cannot be safely performed from this script. Please sign in
+in your current shell so this script can access 1Password items. Example (interactive):
+
+  eval "$(op signin)"
+
+After signing in, re-run this script.
+MSG
+	exit 1
+}
+
+# Helper: fingerprint from a public key string
+fp_from_pub() {
+	# stdin: public key line
+	local tmp out
+	tmp="$(mktemp "${TMPDIR:-/tmp}/pubk.XXXXXX" 2>/dev/null || mktemp -t pubk.XXXXXX)"
+	cat >"$tmp"
+	# macOS ssh-keygen: -E sha256 for explicit format
+	out="$(ssh-keygen -lf "$tmp" -E sha256 2>/dev/null || true)"
+	rm -f "$tmp"
+	if [ -n "${out:-}" ]; then
+		printf "%s" "$(printf '%s' "$out" | awk '{print $2}')"
+	else
+		printf ""
+	fi
+}
+
+# Helper: fingerprint from a .pub file path
+fp_from_file() {
+	local out
+	out="$(ssh-keygen -lf "$1" -E sha256 2>/dev/null || true)"
+	if [ -n "${out:-}" ]; then
+		printf "%s" "$(printf '%s' "$out" | awk '{print $2}')"
+	else
+		printf ""
+	fi
+}
+
+ensure_default_block() {
+	# $1 = working config file (in-place)
+	local f="$1"
+	if grep -qE '^[[:space:]]*Host[[:space:]]+\*$' "$f"; then
+		return 0
+	fi
+	cat >>"$f" <<'EOF'
+
+Host *
+EOF
+	if [ -n "${AGENT_SOCK:-}" ]; then
+		printf '  IdentityAgent %s\n' "$AGENT_SOCK" >>"$f"
+	fi
+	cat >>"$f" <<'EOF'
+  # IMPORTANT: allow agent identities
+  IdentitiesOnly no
+EOF
+}
+
+render_host_block() {
+	# args: host, hostName, user, pubFile
+	local host="$1" hostName="$2" user="$3" pub="$4"
+	: >"$TBLK"
+	{
+		echo "Host $host"
+		[ -n "$hostName" ] && echo "  HostName $hostName"
+		[ -n "$user" ] && echo "  User $user"
+		[ -n "$pub" ] && echo "  IdentityFile $pub"
+		echo "  IdentitiesOnly yes"
+	} >>"$TBLK"
+}
+
+upsert_host_block() {
+	# args: inFile, outFile, host
+	local in="$1" out="$2" host="$3"
+	awk -v host="$host" -v blkfile="$TBLK" '
+    function is_host_line(line) { return (line ~ /^[[:space:]]*Host[[:space:]]+/) }
+
+		{
+			line = $0
+			if (is_host_line(line)) {
+				h = line
+				sub(/^[[:space:]]*Host[[:space:]]+/, "", h)
+				n = split(h, a, /[[:space:]]+/)
+				found = 0
+				for (i = 1; i <= n; i++) if (a[i] == host) found = 1
+				if (found) { skip = 1; next }       # start skipping old block
+				else if (skip) { skip = 0 }         # we just left a block; resume printing
+			}
+
+			if (skip) {
+				# End skipping if we hit a blank line or a comment; preserve those lines
+				if (line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*#/) {
+					skip = 0
+					print
+				}
+				else next
+			}
+
+			if (!skip) print
+		}
+
+    END {
+      print ""                              # blank line before new block
+      while ((getline L < blkfile) > 0) print L
+      close(blkfile)
+    }
+  ' "$in" >"$out"
+}
+
+# -------------------------- Main execution ------------------------------------
+# Skip main execution if in test mode (allows sourcing for function testing)
+if [ -z "${OPSSH_TEST_MODE:-}" ]; then
 
 # -------------------------- Parse arguments -----------------------------------
 while [ $# -gt 0 ]; do
@@ -166,22 +289,6 @@ case "$PUB_FILE" in
 esac
 
 # -------------------------- 1Password sign-in ---------------------------------
-ensure_op() {
-	if op whoami >/dev/null 2>&1; then
-		return 0
-	fi
-	cat >&2 <<'MSG'
-1Password CLI: not signed in.
-
-Interactive sign-in cannot be safely performed from this script. Please sign in
-in your current shell so this script can access 1Password items. Example (interactive):
-
-  eval "$(op signin)"
-
-After signing in, re-run this script.
-MSG
-	exit 1
-}
 ensure_op
 
 # -------------------------- Title & echo header -------------------------------
@@ -242,32 +349,7 @@ else
 	fi
 fi
 
-# Helper: fingerprint from a public key string
-fp_from_pub() {
-	# stdin: public key line
-	local tmp out
-	tmp="$(mktemp "${TMPDIR:-/tmp}/pubk.XXXXXX" 2>/dev/null || mktemp -t pubk.XXXXXX)"
-	cat >"$tmp"
-	# macOS ssh-keygen: -E sha256 for explicit format
-	out="$(ssh-keygen -lf "$tmp" -E sha256 2>/dev/null || true)"
-	rm -f "$tmp"
-	if [ -n "${out:-}" ]; then
-		printf "%s" "$(printf '%s' "$out" | awk '{print $2}')"
-	else
-		printf ""
-	fi
-}
 
-# Helper: fingerprint from a .pub file path
-fp_from_file() {
-	local out
-	out="$(ssh-keygen -lf "$1" -E sha256 2>/dev/null || true)"
-	if [ -n "${out:-}" ]; then
-		printf "%s" "$(printf '%s' "$out" | awk '{print $2}')"
-	else
-		printf ""
-	fi
-}
 
 # -------------------------- Ensure local .pub exists & matches ----------------
 mkdir -p "$(dirname "$PUB_FILE")"
@@ -369,79 +451,8 @@ if [ "$AUTO_ALIAS" -eq 1 ]; then
 			HOST_IPV4="$(dig +short "$HOST" A 2>/dev/null | head -n1 || true)"
 		fi
 	fi
-	# If still empty, we’ll just proceed without alias; not fatal.
+	# If still empty, we'll just proceed without alias; not fatal.
 fi
-
-# -------------------------- SSH config helpers --------------------------------
-ensure_default_block() {
-	# $1 = working config file (in-place)
-	local f="$1"
-	if grep -qE '^[[:space:]]*Host[[:space:]]+\*$' "$f"; then
-		return 0
-	fi
-	cat >>"$f" <<'EOF'
-
-Host *
-EOF
-	if [ -n "${AGENT_SOCK:-}" ]; then
-		printf '  IdentityAgent %s\n' "$AGENT_SOCK" >>"$f"
-	fi
-	cat >>"$f" <<'EOF'
-  # IMPORTANT: allow agent identities
-  IdentitiesOnly no
-EOF
-}
-
-render_host_block() {
-	# args: host, hostName, user, pubFile
-	local host="$1" hostName="$2" user="$3" pub="$4"
-	: >"$TBLK"
-	{
-		echo "Host $host"
-		[ -n "$hostName" ] && echo "  HostName $hostName"
-		[ -n "$user" ] && echo "  User $user"
-		[ -n "$pub" ] && echo "  IdentityFile $pub"
-		echo "  IdentitiesOnly yes"
-	} >>"$TBLK"
-}
-
-upsert_host_block() {
-	# args: inFile, outFile, host
-	local in="$1" out="$2" host="$3"
-	awk -v host="$host" -v blkfile="$TBLK" '
-    function is_host_line(line) { return (line ~ /^[[:space:]]*Host[[:space:]]+/) }
-
-		{
-			line = $0
-			if (is_host_line(line)) {
-				h = line
-				sub(/^[[:space:]]*Host[[:space:]]+/, "", h)
-				n = split(h, a, /[[:space:]]+/)
-				found = 0
-				for (i = 1; i <= n; i++) if (a[i] == host) found = 1
-				if (found) { skip = 1; next }       # start skipping old block
-				else if (skip) { skip = 0 }         # we just left a block; resume printing
-			}
-
-			if (skip) {
-				# End skipping if we hit a blank line or a comment; preserve those lines
-				if (line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*#/) {
-					skip = 0
-					print
-				}
-				else next
-			}
-
-			if (!skip) print
-		}
-
-    END {
-      print ""                              # blank line before new block
-      while ((getline L < blkfile) > 0) print L
-      close(blkfile)
-    }
-  ' "$in" >"$out"
-}
 
 # -------------------------- Build new config (dry-run or write) ---------------
 # Start from existing config (or empty)
@@ -500,3 +511,5 @@ echo "User:        $USER_NAME"
 echo "IdentityFile $PUB_FILE"
 [ -n "$FP_DISPLAY" ] && echo "Fingerprint: $FP_DISPLAY"
 [ "$DRY_RUN" -eq 1 ] && echo "Done (dry-run)." || echo "Done."
+
+fi # End of main execution (OPSSH_TEST_MODE check)
