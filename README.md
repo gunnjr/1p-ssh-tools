@@ -23,6 +23,7 @@ All scripts are written for **macOS’s native Bash 3.2** for maximum portabilit
 ## 🧩 Script Summaries
 
 ### 🔑 `op-ssh-keygen.sh`
+
 - Searches for an existing SSH key in 1Password (by host or title pattern).  
 - If not found, creates a new Ed25519 key in 1Password.  
 - Exports the public key to a local `.pub` file under `~/.ssh`.  
@@ -30,6 +31,7 @@ All scripts are written for **macOS’s native Bash 3.2** for maximum portabilit
 - Optionally updates 1Password’s agent configuration (future enhancement).
 
 ### 🧾 `op-ssh-status.sh`
+
 - Lists configured SSH hosts and corresponding local/public key files.  
 - Verifies if local key fingerprints match 1Password records.  
 - Detects missing or mismatched configuration and suggests fixes.  
@@ -37,11 +39,14 @@ All scripts are written for **macOS’s native Bash 3.2** for maximum portabilit
 - Output is formatted for readability in terminal tables.
 
 ### 🧷 `op-ssh-show-pubkey.sh`
+
 - Simple utility to retrieve, display, and copy public keys from 1Password.  
 - Useful for quickly deploying keys to remote servers (e.g., `authorized_keys`).
 
 ### 🧱 `op-ssh-addhost.sh` *(under development)*
+
 Planned functionality:
+
 - Checks for an existing SSH key in 1Password (creates one if missing).  
 - Validates or generates a matching local `.pub` file.  
 - Confirms the key pair matches between local and 1Password.  
@@ -60,9 +65,11 @@ Planned functionality:
 - **Bash 3.2+ (macOS default)**
 
 Optional (for full compatibility testing):
+
 - `dig` or `ping` for hostname resolution
 
 To verify dependencies:
+
 ```bash
 for cmd in op jq ssh-keygen; do command -v $cmd >/dev/null || echo "Missing: $cmd"; done
 ```
@@ -82,6 +89,7 @@ chmod +x ~/bin/op-ssh-*.sh
 ```
 
 Ensure your shell’s PATH includes `~/bin`:
+
 ```bash
 export PATH="$HOME/bin:$PATH"
 ```
