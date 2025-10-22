@@ -20,20 +20,22 @@ set -euo pipefail
 SSH_DIR="${HOME}/.ssh"
 CONF_FILE="${SSH_DIR}/config"
 
-need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1" >&2; exit 2; }; }
+need() { command -v "$1" > /dev/null 2>&1 || {
+  echo "Missing dependency: $1" >&2
+  exit 2
+}; }
 need jq
 need ssh-keygen
 
-
 ensure_op_signed_in() {
-  if command -v op >/dev/null 2>&1; then
-    if op whoami >/dev/null 2>&1; then
+  if command -v op > /dev/null 2>&1; then
+    if op whoami > /dev/null 2>&1; then
       HAS_OP=1
       return 0
     fi
     echo "1Password CLI: not signed in — attempting 'op signin'..." >&2
     # Interactive sign-in; user may cancel. Suppress noisy output but keep prompts.
-    if op signin >/dev/null 2>&1; then
+    if op signin > /dev/null 2>&1; then
       HAS_OP=1
       echo "1Password CLI: signed in." >&2
       return 0
@@ -56,7 +58,7 @@ MODE="default"
 OUT_JSON=0
 
 usage() {
-  cat <<'TXT'
+  cat << 'TXT'
 op-ssh-status.sh — Audit SSH hosts, public keys, and 1Password SSH keys
 
 Usage:
@@ -71,15 +73,40 @@ TXT
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --all) MODE="all"; shift ;;
-    --host) HOST_PATTERN="${2:-}"; MODE="host"; shift 2 ;;
-    --orphans) MODE="orphans"; shift ;;
-    --json) OUT_JSON=1; shift ;;
-    --keys-only) MODE="keys"; shift ;;
-    --pubs-only) MODE="pubs"; shift ;;
-    --config-only) MODE="config"; shift ;;
-    -h|--help) usage ;;
-    *) echo "Unknown arg: $1" >&2; usage ;;
+    --all)
+      MODE="all"
+      shift
+      ;;
+    --host)
+      HOST_PATTERN="${2:-}"
+      MODE="host"
+      shift 2
+      ;;
+    --orphans)
+      MODE="orphans"
+      shift
+      ;;
+    --json)
+      OUT_JSON=1
+      shift
+      ;;
+    --keys-only)
+      MODE="keys"
+      shift
+      ;;
+    --pubs-only)
+      MODE="pubs"
+      shift
+      ;;
+    --config-only)
+      MODE="config"
+      shift
+      ;;
+    -h | --help) usage ;;
+    *)
+      echo "Unknown arg: $1" >&2
+      usage
+      ;;
   esac
 done
 
@@ -88,61 +115,70 @@ PUB_PATHS=()
 PUB_FPRS=()
 while IFS= read -r p; do
   [ -n "$p" ] || continue
-  fp="$(ssh-keygen -lf "$p" 2>/dev/null | awk '{print $2}')" || true
+  fp="$(ssh-keygen -lf "$p" 2> /dev/null | awk '{print $2}')" || true
   [ -n "${fp:-}" ] || fp="INVALID"
   PUB_PATHS+=("$p")
   PUB_FPRS+=("$fp")
-done < <( { find "$SSH_DIR" -maxdepth 1 -type f -name "*.pub" 2>/dev/null || true; } | sort )
+done < <({ find "$SSH_DIR" -maxdepth 1 -type f -name "*.pub" 2> /dev/null || true; } | sort)
 
 # ---------- 1Password SSH keys (optional) ----------
 OP_IDS=()
 OP_TITLES=()
 OP_FPRS=()
 if [ "$HAS_OP" -eq 1 ]; then
-  items_json="$(op item list --categories 'SSH Key' --format json 2>/dev/null || true)"
+  items_json="$(op item list --categories 'SSH Key' --format json 2> /dev/null || true)"
   : "${items_json:='[]'}"
-  count="$(printf '%s\n' "$items_json" | jq 'length' 2>/dev/null || echo 0)"
+  count="$(printf '%s\n' "$items_json" | jq 'length' 2> /dev/null || echo 0)"
   i=0
   while [ $i -lt "$count" ]; do
     id="$(printf '%s\n' "$items_json" | jq -r ".[$i].id")"
     title="$(printf '%s\n' "$items_json" | jq -r ".[$i].title")"
-    item_json="$(op item get "$id" --format json 2>/dev/null || echo '{}')"
+    item_json="$(op item get "$id" --format json 2> /dev/null || echo '{}')"
     pub="$(printf '%s\n' "$item_json" | jq -r '
       (.fields[]? | select((.label // .t // "")|ascii_downcase=="public key") | (.value // .v)) //
       (.sections[]?.fields[]? | select(.t=="public key") | .v) // empty
     ')"
     fp=""
     if [ -n "${pub:-}" ] && [ "$pub" != "null" ]; then
-      fp="$(printf '%s\n' "$pub" | ssh-keygen -lf /dev/stdin 2>/dev/null | awk '{print $2}')"
+      fp="$(printf '%s\n' "$pub" | ssh-keygen -lf /dev/stdin 2> /dev/null | awk '{print $2}')"
     fi
-    OP_IDS+=("$id"); OP_TITLES+=("$title"); OP_FPRS+=("${fp:-}")
-    i=$((i+1))
+    OP_IDS+=("$id")
+    OP_TITLES+=("$title")
+    OP_FPRS+=("${fp:-}")
+    i=$((i + 1))
   done
 fi
 
 find_1p_title_by_fp() {
-  _fp="$1"; j=0
+  _fp="$1"
+  j=0
   while [ $j -lt ${#OP_FPRS[@]} ]; do
     if [ -n "$_fp" ] && [ "${OP_FPRS[$j]}" = "$_fp" ]; then
-      echo "${OP_TITLES[$j]}"; return 0
+      echo "${OP_TITLES[$j]}"
+      return 0
     fi
-    j=$((j+1))
+    j=$((j + 1))
   done
   return 1
 }
 find_fp_by_path() {
-  _p="$1"; j=0
+  _p="$1"
+  j=0
   while [ $j -lt ${#PUB_PATHS[@]} ]; do
     if [ "${PUB_PATHS[$j]}" = "$_p" ]; then
-      echo "${PUB_FPRS[$j]}"; return 0
+      echo "${PUB_FPRS[$j]}"
+      return 0
     fi
-    j=$((j+1))
+    j=$((j + 1))
   done
   return 1
 }
 
 # ---------- parse ~/.ssh/config ----------
-ALIASES=(); HNAMES=(); USERS=(); IDFILES=()
+ALIASES=()
+HNAMES=()
+USERS=()
+IDFILES=()
 if [ -f "$CONF_FILE" ]; then
   block=""
   while IFS= read -r line || [ -n "$line" ]; do
@@ -156,14 +192,14 @@ if [ -f "$CONF_FILE" ]; then
             uuser="$(printf '%s\n' "$block" | awk 'BEGIN{IGNORECASE=1} /^[[:space:]]*User[[:space:]]/{print $2}' | tail -n1)"
             idf="$(printf '%s\n' "$block" | awk 'BEGIN{IGNORECASE=1} /^[[:space:]]*IdentityFile[[:space:]]/{sub(/^[[:space:]]*IdentityFile[[:space:]]+/,"");print}' | tail -n1)"
 
-            set -f  # disable globbing so "Host *" doesn't expand into filenames
+            set -f # disable globbing so "Host *" doesn't expand into filenames
             for a in $names; do
               ALIASES+=("$a")
               HNAMES+=("${hname:-}")
               USERS+=("${uuser:-}")
               IDFILES+=("${idf:-}")
             done
-            set +f  # re-enable globbing
+            set +f # re-enable globbing
 
           fi
         fi
@@ -180,7 +216,7 @@ if [ -f "$CONF_FILE" ]; then
       hname="$(printf '%s\n' "$block" | awk 'BEGIN{IGNORECASE=1} /^[[:space:]]*HostName[[:space:]]/{print $2}' | tail -n1)"
       uuser="$(printf '%s\n' "$block" | awk 'BEGIN{IGNORECASE=1} /^[[:space:]]*User[[:space:]]/{print $2}' | tail -n1)"
       idf="$(printf '%s\n' "$block" | awk 'BEGIN{IGNORECASE=1} /^[[:space:]]*IdentityFile[[:space:]]/{sub(/^[[:space:]]*IdentityFile[[:space:]]+/,"");print}' | tail -n1)"
-      
+
       set -f
       for a in $names; do
         ALIASES+=("$a")
@@ -196,16 +232,28 @@ fi
 
 # Filter by --host pattern if set
 if [ "$MODE" = "host" ]; then
-  [ -n "${HOST_PATTERN:-}" ] || { echo "Missing --host <pattern>" >&2; exit 2; }
+  [ -n "${HOST_PATTERN:-}" ] || {
+    echo "Missing --host <pattern>" >&2
+    exit 2
+  }
   _A=() _H=() _U=() _I=()
   i=0
   while [ $i -lt ${#ALIASES[@]} ]; do
     a="${ALIASES[$i]}"
-    echo "$a" | grep -E "$HOST_PATTERN" >/dev/null 2>&1 || { i=$((i+1)); continue; }
-    _A+=("$a"); _H+=("${HNAMES[$i]}"); _U+=("${USERS[$i]}"); _I+=("${IDFILES[$i]}")
-    i=$((i+1))
+    echo "$a" | grep -E "$HOST_PATTERN" > /dev/null 2>&1 || {
+      i=$((i + 1))
+      continue
+    }
+    _A+=("$a")
+    _H+=("${HNAMES[$i]}")
+    _U+=("${USERS[$i]}")
+    _I+=("${IDFILES[$i]}")
+    i=$((i + 1))
   done
-  ALIASES=("${_A[@]}"); HNAMES=("${_H[@]}"); USERS=("${_U[@]}"); IDFILES=("${_I[@]}")
+  ALIASES=("${_A[@]}")
+  HNAMES=("${_H[@]}")
+  USERS=("${_U[@]}")
+  IDFILES=("${_I[@]}")
 fi
 
 # ---------- temp file for table buffering ----------
@@ -220,26 +268,30 @@ fi
 # ---------- modes ----------
 if [ "$MODE" = "keys" ]; then
   if [ "$HAS_OP" -eq 0 ] || [ ${#OP_IDS[@]} -eq 0 ]; then
-    echo "No 1Password SSH keys found or not signed in." >&2; exit 1
+    echo "No 1Password SSH keys found or not signed in." >&2
+    exit 1
   fi
   if [ "$OUT_JSON" -eq 1 ]; then
     printf "["
-    j=0; first=1
+    j=0
+    first=1
     while [ $j -lt ${#OP_TITLES[@]} ]; do
       [ $first -eq 0 ] && printf ","
       printf '{"title":%s,"fingerprint":%s}' \
         "$(printf '%s' "${OP_TITLES[$j]}" | jq -R '.') " \
-        "$(printf '%s' "${OP_FPRS[$j]}"   | jq -R '.') "
-      first=0; j=$((j+1))
+        "$(printf '%s' "${OP_FPRS[$j]}" | jq -R '.') "
+      first=0
+      j=$((j + 1))
     done
-    printf "]\n"; exit 0
+    printf "]\n"
+    exit 0
   else
-    printf "%-50s  %s\n" "1P_TITLE" "FINGERPRINT" >>"$TABLE_TMP"
-    printf "%s\n" "-------------------------------------------------------------------------" >>"$TABLE_TMP"
+    printf "%-50s  %s\n" "1P_TITLE" "FINGERPRINT" >> "$TABLE_TMP"
+    printf "%s\n" "-------------------------------------------------------------------------" >> "$TABLE_TMP"
     j=0
     while [ $j -lt ${#OP_TITLES[@]} ]; do
-      printf "%-50s  %s\n" "${OP_TITLES[$j]}" "${OP_FPRS[$j]}" >>"$TABLE_TMP"
-      j=$((j+1))
+      printf "%-50s  %s\n" "${OP_TITLES[$j]}" "${OP_FPRS[$j]}" >> "$TABLE_TMP"
+      j=$((j + 1))
     done
     echo
     cat "$TABLE_TMP"
@@ -250,22 +302,25 @@ fi
 if [ "$MODE" = "pubs" ]; then
   if [ "$OUT_JSON" -eq 1 ]; then
     printf "["
-    j=0; first=1
+    j=0
+    first=1
     while [ $j -lt ${#PUB_PATHS[@]} ]; do
       [ $first -eq 0 ] && printf ","
       printf '{"path":%s,"fingerprint":%s}' \
         "$(printf '%s' "${PUB_PATHS[$j]}" | jq -R '.')" \
-        "$(printf '%s' "${PUB_FPRS[$j]}"  | jq -R '.')" 
-      first=0; j=$((j+1))
+        "$(printf '%s' "${PUB_FPRS[$j]}" | jq -R '.')"
+      first=0
+      j=$((j + 1))
     done
-    printf "]\n"; exit 0
+    printf "]\n"
+    exit 0
   else
-    printf "%-45s  %s\n" "PUB_PATH" "FINGERPRINT" >>"$TABLE_TMP"
-    printf "%s\n" "----------------------------------------------------------------" >>"$TABLE_TMP"
+    printf "%-45s  %s\n" "PUB_PATH" "FINGERPRINT" >> "$TABLE_TMP"
+    printf "%s\n" "----------------------------------------------------------------" >> "$TABLE_TMP"
     j=0
     while [ $j -lt ${#PUB_PATHS[@]} ]; do
-      printf "%-45s  %s\n" "${PUB_PATHS[$j]}" "${PUB_FPRS[$j]}" >>"$TABLE_TMP"
-      j=$((j+1))
+      printf "%-45s  %s\n" "${PUB_PATHS[$j]}" "${PUB_FPRS[$j]}" >> "$TABLE_TMP"
+      j=$((j + 1))
     done
     echo
     cat "$TABLE_TMP"
@@ -279,8 +334,8 @@ if [ "$MODE" = "config" ] || [ "$MODE" = "all" ] || [ "$MODE" = "default" ] || [
     printf "["
   else
     printf "%-22s %-18s %-10s %-34s %-44s %-30s %-s\n" \
-      "HOST" "HOSTNAME" "USER" "IDENTITYFILE" "FINGERPRINT" "1P_KEY" "STATUS" >>"$TABLE_TMP"
-    printf '%*s\n' 170 '' | tr ' ' '-' >>"$TABLE_TMP"
+      "HOST" "HOSTNAME" "USER" "IDENTITYFILE" "FINGERPRINT" "1P_KEY" "STATUS" >> "$TABLE_TMP"
+    printf '%*s\n' 170 '' | tr ' ' '-' >> "$TABLE_TMP"
     if [ ${#ALIASES[@]} -eq 0 ]; then
       echo "No Host entries found in $CONF_FILE" >&2
       echo
@@ -289,14 +344,18 @@ if [ "$MODE" = "config" ] || [ "$MODE" = "all" ] || [ "$MODE" = "default" ] || [
     fi
   fi
 
-  i=0; first=1
+  i=0
+  first=1
   while [ $i -lt ${#ALIASES[@]} ]; do
     alias="${ALIASES[$i]}"
     hname="${HNAMES[$i]}"
     user="${USERS[$i]}"
     idf="${IDFILES[$i]}"
 
-    st="OK"; tip=""; fp=""; onep=""
+    st="OK"
+    tip=""
+    fp=""
+    onep=""
 
     if [ -z "${idf:-}" ]; then
       st="WARN: no IdentityFile"
@@ -335,23 +394,23 @@ if [ "$MODE" = "config" ] || [ "$MODE" = "all" ] || [ "$MODE" = "default" ] || [
       printf '{"alias":%s,"hostName":%s,"user":%s,"identityFile":%s,"fingerprint":%s,"onepassword":%s,"status":%s,"tip":%s}' \
         "$(printf '%s' "$alias" | jq -R '.')" \
         "$(printf '%s' "$hname" | jq -R '.')" \
-        "$(printf '%s' "$user"  | jq -R '.')" \
-        "$(printf '%s' "$idf"   | jq -R '.')" \
-        "$(printf '%s' "$fp"    | jq -R '.')" \
-        "$(printf '%s' "$onep"  | jq -R '.')" \
-        "$(printf '%s' "$st"    | jq -R '.')" \
-        "$(printf '%s' "$tip"   | jq -R '.')" 
+        "$(printf '%s' "$user" | jq -R '.')" \
+        "$(printf '%s' "$idf" | jq -R '.')" \
+        "$(printf '%s' "$fp" | jq -R '.')" \
+        "$(printf '%s' "$onep" | jq -R '.')" \
+        "$(printf '%s' "$st" | jq -R '.')" \
+        "$(printf '%s' "$tip" | jq -R '.')"
       first=0
     else
       printf "%-22s %-18s %-10s %-34s %-44s %-30s %-s\n" \
-        "$alias" "$hname" "$user" "$idf" "$fp" "$onep" "$st" >>"$TABLE_TMP"
+        "$alias" "$hname" "$user" "$idf" "$fp" "$onep" "$st" >> "$TABLE_TMP"
       if [ -n "$tip" ]; then
         # keep helper on stderr so it prints before the table
         echo "- $alias: $tip" >&2
       fi
     fi
 
-    i=$((i+1))
+    i=$((i + 1))
   done
 
   if [ "$OUT_JSON" -eq 1 ]; then
@@ -365,49 +424,67 @@ if [ "$MODE" = "config" ] || [ "$MODE" = "all" ] || [ "$MODE" = "default" ] || [
 fi
 
 if [ "$MODE" = "orphans" ]; then
-  USED=(); i=0
+  USED=()
+  i=0
   while [ $i -lt ${#IDFILES[@]} ]; do
-    p="${IDFILES[$i]}"; [ -n "$p" ] && USED+=("$p"); i=$((i+1))
+    p="${IDFILES[$i]}"
+    [ -n "$p" ] && USED+=("$p")
+    i=$((i + 1))
   done
 
   if [ "$OUT_JSON" -eq 1 ]; then
     printf "["
-    j=0; first=1
+    j=0
+    first=1
     while [ $j -lt ${#PUB_PATHS[@]} ]; do
-      p="${PUB_PATHS[$j]}"; fp="${PUB_FPRS[$j]}"
-      inuse=0; k=0
+      p="${PUB_PATHS[$j]}"
+      fp="${PUB_FPRS[$j]}"
+      inuse=0
+      k=0
       while [ $k -lt ${#USED[@]} ]; do
-        [ "${USED[$k]}" = "$p" ] && { inuse=1; break; }
-        k=$((k+1))
+        [ "${USED[$k]}" = "$p" ] && {
+          inuse=1
+          break
+        }
+        k=$((k + 1))
       done
       if [ $inuse -eq 0 ]; then
         [ $first -eq 0 ] && printf ","
         printf '{"path":%s,"fingerprint":%s}' \
-          "$(printf '%s' "$p"  | jq -R '.')" \
-          "$(printf '%s' "$fp" | jq -R '.')" 
+          "$(printf '%s' "$p" | jq -R '.')" \
+          "$(printf '%s' "$fp" | jq -R '.')"
         first=0
       fi
-      j=$((j+1))
+      j=$((j + 1))
     done
-    printf "]\n"; exit 0
+    printf "]\n"
+    exit 0
   else
-    [ -n "${TABLE_TMP:-}" ] || { echo "Internal error: TABLE_TMP missing" >&2; exit 2; }
-    printf "%-45s  %s\n" "ORPHAN_PUB" "FINGERPRINT" >>"$TABLE_TMP"
-    printf "%s\n" "----------------------------------------------------------------" >>"$TABLE_TMP"
+    [ -n "${TABLE_TMP:-}" ] || {
+      echo "Internal error: TABLE_TMP missing" >&2
+      exit 2
+    }
+    printf "%-45s  %s\n" "ORPHAN_PUB" "FINGERPRINT" >> "$TABLE_TMP"
+    printf "%s\n" "----------------------------------------------------------------" >> "$TABLE_TMP"
     printed=0
     j=0
     while [ $j -lt ${#PUB_PATHS[@]} ]; do
-      p="${PUB_PATHS[$j]}"; fp="${PUB_FPRS[$j]}"
-      inuse=0; k=0
+      p="${PUB_PATHS[$j]}"
+      fp="${PUB_FPRS[$j]}"
+      inuse=0
+      k=0
       while [ $k -lt ${#USED[@]} ]; do
-        [ "${USED[$k]}" = "$p" ] && { inuse=1; break; }
-        k=$((k+1))
+        [ "${USED[$k]}" = "$p" ] && {
+          inuse=1
+          break
+        }
+        k=$((k + 1))
       done
       if [ $inuse -eq 0 ]; then
-        printf "%-45s  %s\n" "$p" "$fp" >>"$TABLE_TMP"
+        printf "%-45s  %s\n" "$p" "$fp" >> "$TABLE_TMP"
         printed=1
       fi
-      j=$((j+1))
+      j=$((j + 1))
     done
     echo
     cat "$TABLE_TMP"
@@ -417,4 +494,3 @@ if [ "$MODE" = "orphans" ]; then
 fi
 
 usage
-

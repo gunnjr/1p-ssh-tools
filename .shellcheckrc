@@ -1,0 +1,7 @@
+# shellcheck configuration for this project
+# Keep rules strict, but allow sourcing scripts with dynamic paths in tests
+# and allow local assignment with declaration for readability in Bash 3.2.
+
+disable=SC1090,SC1091   # Can't follow non-constant source in tests/; macOS paths
+# Consider enabling these later if desired:
+# disable=SC2155        # local var with command substitution on one line

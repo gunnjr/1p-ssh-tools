@@ -1,0 +1,12 @@
+{
+  // Format shell scripts on save using shfmt (requires extension: foxundermoon.shell-format)
+  "[shellscript]": {
+    "editor.formatOnSave": true
+  },
+  // Only fix markdown issues on save via markdownlint
+  "[markdown]": {
+    "editor.codeActionsOnSave": {
+      "source.fixAll.markdownlint": "explicit"
+    }
+  }
+}
