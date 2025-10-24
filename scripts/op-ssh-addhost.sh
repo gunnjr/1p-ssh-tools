@@ -563,14 +563,12 @@ EOF
 
   # -------------------------- Set git signing key if requested ------------------
   if [ "$SET_GIT_SIGNING_KEY" -eq 1 ]; then
-    # Extract public key string (ONEP_PUB) and format for git config
-    # Only works for ed25519/rsa keys in OpenSSH format
+    # Extract full public key string (ONEP_PUB) for git config
     if [ -z "$ONEP_PUB" ] && [ -s "$PUB_FILE" ]; then
       ONEP_PUB="$(cat "$PUB_FILE" | head -n1)"
     fi
     if [ -n "$ONEP_PUB" ]; then
-      # Extract the public key string (e.g., ssh-ed25519 AAAA... user@host)
-      GIT_SIGNING_KEY="$(echo "$ONEP_PUB" | awk '{print $2}')"
+      GIT_SIGNING_KEY="$ONEP_PUB"
       # Get current git signing key (global)
       CURRENT_GIT_SIGNING_KEY="$(git config --global --get user.signingkey || true)"
       # Set gpg.format=ssh if not already
