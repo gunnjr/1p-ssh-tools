@@ -4,32 +4,39 @@ set -euo pipefail
 # Functional tests for op-ssh-show-pubkey.sh
 # Uses real 1Password data (discovers SSH keys dynamically)
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT_DIR/scripts/op-ssh-show-pubkey.sh"
 
 PASS=0
 FAIL=0
 
-ok() { printf "[ OK ] %s\n" "$1"; ((PASS++)); }
-no() { printf "[FAIL] %s\n" "$1"; ((FAIL++)); }
+ok() { printf "[ OK ] %s\n" "$1"; PASS=$((PASS+1)); }
+no() { printf "[FAIL] %s\n" "$1"; FAIL=$((FAIL+1)); }
+
+echo "[start] op-ssh-show-pubkey functional tests"
+if [[ "${DEBUG:-0}" = "1" ]]; then set -x; fi
 
 # Verify op CLI is available and signed in
 if ! command -v op >/dev/null 2>&1; then
-  echo "[ERROR] op CLI not found. Install 1Password CLI first." >&2
+  echo "[FAIL-SETUP] op CLI not found. Install 1Password CLI first." >&2
   exit 2
 fi
 
-if ! op whoami >/dev/null 2>&1; then
-  echo "[ERROR] Not signed in to 1Password. Run: op signin" >&2
+whoami_status=0
+if ! whoami_out="$(op whoami 2>&1)"; then
+  whoami_status=$?
+fi
+if [[ $whoami_status -ne 0 ]]; then
+  echo "[FAIL-SETUP] Not signed in to 1Password (op whoami failed)." >&2
+  printf "%s\n" "$whoami_out" | sed 's/^/[op whoami] /' >&2 || true
+  echo "[action] Run: op signin" >&2
   exit 2
 fi
 
-echo "Running op-ssh-show-pubkey functional tests..."
-echo "Using 1Password vault: Private"
-echo ""
+echo "[info] Using 1Password vault: Private"
 
 # Discover available SSH keys in vault
-echo "Discovering SSH keys in vault..."
+echo "[run] Discovering SSH keys in vault..."
 available_keys=$(op item list --vault Private --categories "SSH Key" --format json 2>/dev/null | jq -r '.[].title' 2>/dev/null || echo "")
 
 if [ -z "$available_keys" ]; then
@@ -40,7 +47,7 @@ fi
 # Pick first key for testing
 first_key=$(echo "$available_keys" | head -1)
 first_key_pattern=$(echo "$first_key" | cut -c1-5)  # First 5 chars as pattern
-echo "Found SSH keys. Testing with: $first_key"
+echo "[info] Found SSH key: $first_key"
 echo ""
 
 # Test 1: List all SSH keys in vault
@@ -94,7 +101,8 @@ fi
 
 # Test 5: Missing pattern returns error
 TEST5="Missing pattern returns error"
-if "$SCRIPT" 2>&1 | grep -q "Usage:"; then
+output=$("$SCRIPT" 2>&1 || true)
+if echo "$output" | grep -q "Usage:"; then
   ok "$TEST5"
 else
   no "$TEST5"
@@ -102,7 +110,8 @@ fi
 
 # Test 6: Invalid option returns error
 TEST6="Invalid option returns error"
-if "$SCRIPT" "test" --invalid-flag 2>&1 | grep -q "Unknown option"; then
+output=$("$SCRIPT" "test" --invalid-flag 2>&1 || true)
+if echo "$output" | grep -q "Unknown option"; then
   ok "$TEST6"
 else
   no "$TEST6"
@@ -122,7 +131,8 @@ fi
 
 # Test 8: Non-existent pattern returns error
 TEST8="Non-existent pattern returns error"
-if "$SCRIPT" "NONEXISTENT_KEY_12345_XYZ" --list-only 2>&1 | grep -q "No SSH items found"; then
+output=$("$SCRIPT" "NONEXISTENT_KEY_12345_XYZ" --list-only 2>&1 || true)
+if echo "$output" | grep -q "No SSH items found"; then
   ok "$TEST8"
 else
   no "$TEST8"
@@ -135,8 +145,18 @@ echo "========================================"
 
 if [ "$FAIL" -eq 0 ]; then
   echo "✅ All functional tests passed!"
+  if [[ "${SHOW_OUTPUT:-0}" = "1" ]]; then
+    echo ""
+    echo "----- BEGIN op-ssh-show-pubkey output -----"
+    printf "%s\n" "$output"
+    echo "----- END op-ssh-show-pubkey output -----"
+  fi
   exit 0
 else
+  echo ""
+  echo "----- BEGIN op-ssh-show-pubkey output (on failure) -----"
+  printf "%s\n" "$output"
+  echo "----- END op-ssh-show-pubkey output -----"
   echo "❌ Some tests failed."
   exit 1
 fi

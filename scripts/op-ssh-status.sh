@@ -79,6 +79,11 @@ while [ $# -gt 0 ]; do
       ;;
     --host)
       HOST_PATTERN="${2:-}"
+      # Sanitize HOST_PATTERN: only allow safe regex chars
+      if ! [[ "$HOST_PATTERN" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
+        echo "Unsafe host pattern: $HOST_PATTERN" >&2
+        exit 2
+      fi
       MODE="host"
       shift 2
       ;;
@@ -116,7 +121,7 @@ PUB_FPRS=()
 while IFS= read -r p; do
   [ -n "$p" ] || continue
   fp="$(ssh-keygen -lf "$p" 2> /dev/null | awk '{print $2}')" || true
-  [ -n "${fp:-}" ] || fp="INVALID"
+  [ -n "$fp" ] || fp="INVALID"
   PUB_PATHS+=("$p")
   PUB_FPRS+=("$fp")
 done < <({ find "$SSH_DIR" -maxdepth 1 -type f -name "*.pub" 2> /dev/null || true; } | sort)
@@ -193,12 +198,12 @@ if [ -f "$CONF_FILE" ]; then
             idf="$(printf '%s\n' "$block" | awk 'BEGIN{IGNORECASE=1} /^[[:space:]]*IdentityFile[[:space:]]/{sub(/^[[:space:]]*IdentityFile[[:space:]]+/,"");print}' | tail -n1)"
 
             set -f # disable globbing so "Host *" doesn't expand into filenames
-            for a in $names; do
+            while IFS= read -r a; do
               ALIASES+=("$a")
               HNAMES+=("${hname:-}")
               USERS+=("${uuser:-}")
               IDFILES+=("${idf:-}")
-            done
+            done < <(printf '%s\n' $names)
             set +f # re-enable globbing
 
           fi
@@ -218,12 +223,12 @@ if [ -f "$CONF_FILE" ]; then
       idf="$(printf '%s\n' "$block" | awk 'BEGIN{IGNORECASE=1} /^[[:space:]]*IdentityFile[[:space:]]/{sub(/^[[:space:]]*IdentityFile[[:space:]]+/,"");print}' | tail -n1)"
 
       set -f
-      for a in $names; do
+      while IFS= read -r a; do
         ALIASES+=("$a")
         HNAMES+=("${hname:-}")
         USERS+=("${uuser:-}")
         IDFILES+=("${idf:-}")
-      done
+      done < <(printf '%s\n' $names)
       set +f
 
     fi
@@ -260,7 +265,7 @@ fi
 # In JSON mode we print directly; otherwise buffer table to temp so stderr shows first.
 TABLE_TMP=""
 if [ "$OUT_JSON" -eq 0 ]; then
-  TABLE_TMP="/tmp/op-ssh-status.$$"
+  TABLE_TMP="$(mktemp /tmp/op-ssh-status.XXXXXX)"
   : > "$TABLE_TMP"
   trap 'rm -f "$TABLE_TMP"' EXIT
 fi
@@ -333,8 +338,8 @@ if [ "$MODE" = "config" ] || [ "$MODE" = "all" ] || [ "$MODE" = "default" ] || [
   if [ "$OUT_JSON" -eq 1 ]; then
     printf "["
   else
-    printf "%-22s %-18s %-10s %-34s %-44s %-30s %-s\n" \
-      "HOST" "HOSTNAME" "USER" "IDENTITYFILE" "FINGERPRINT" "1P_KEY" "STATUS" >> "$TABLE_TMP"
+    printf "%-26s %-26s %-12s %-32s %-44s %-s\n" \
+      "HOST" "HOSTNAME" "USER" "IDENTITYFILE (~/.ssh)" "1P_KEY" "STATUS" >> "$TABLE_TMP"
     printf '%*s\n' 170 '' | tr ' ' '-' >> "$TABLE_TMP"
     if [ ${#ALIASES[@]} -eq 0 ]; then
       echo "No Host entries found in $CONF_FILE" >&2
@@ -347,15 +352,15 @@ if [ "$MODE" = "config" ] || [ "$MODE" = "all" ] || [ "$MODE" = "default" ] || [
   i=0
   first=1
   while [ $i -lt ${#ALIASES[@]} ]; do
-    alias="${ALIASES[$i]}"
-    hname="${HNAMES[$i]}"
-    user="${USERS[$i]}"
-    idf="${IDFILES[$i]}"
+  alias="${ALIASES[$i]}"
+  hname="${HNAMES[$i]}"
+  user="${USERS[$i]}"
+  idf="${IDFILES[$i]}"
+  idf_file="$(basename -- "$idf")"
 
     st="OK"
     tip=""
-    fp=""
-    onep=""
+  onep=""
 
     if [ -z "${idf:-}" ]; then
       st="WARN: no IdentityFile"
@@ -363,28 +368,29 @@ if [ "$MODE" = "config" ] || [ "$MODE" = "all" ] || [ "$MODE" = "default" ] || [
       WARN=1
     else
       if [ ! -f "$idf" ]; then
-        st="WARN: missing .pub"
+        echo "[DEBUG] IdentityFile not found: $idf" >&2
+        st="WARN: missing or unreadable .pub"
+        tip="Expected $idf. Re-run op-ssh-addhost.sh or recreate public key."
+        WARN=1
+      elif [ ! -r "$idf" ]; then
+        echo "[DEBUG] IdentityFile not readable: $idf" >&2
+        st="WARN: missing or unreadable .pub"
         tip="Expected $idf. Re-run op-ssh-addhost.sh or recreate public key."
         WARN=1
       else
-        fp="$(find_fp_by_path "$idf" || true)"
-        if [ -z "${fp:-}" ] || [ "$fp" = "INVALID" ]; then
-          st="WARN: unreadable .pub"
-          tip="Check permissions or regenerate."
-          WARN=1
-        else
-          if [ "$HAS_OP" -eq 1 ]; then
-            onep="$(find_1p_title_by_fp "$fp" || true)"
-            if [ -z "${onep:-}" ]; then
-              st="WARN: no matching 1P key"
-              tip="Ensure 1Password has the private key for this pub key."
-              WARN=1
-            fi
-          else
-            st="INFO: op not signed in"
-            tip="Run: op signin (to verify 1P match)"
+        if [ "$HAS_OP" -eq 1 ]; then
+          fp="$(find_fp_by_path "$idf" || true)"
+          onep="$(find_1p_title_by_fp "$fp" || true)"
+          echo "[DEBUG] 1Password key title lookup for fingerprint $fp: $onep" >&2
+          if [ -z "$onep" ]; then
+            st="WARN: no matching 1P key"
+            tip="Ensure 1Password has the private key for this pub key."
             WARN=1
           fi
+        else
+          st="INFO: op not signed in"
+          tip="Run: op signin (to verify 1P match)"
+          WARN=1
         fi
       fi
     fi
@@ -402,8 +408,8 @@ if [ "$MODE" = "config" ] || [ "$MODE" = "all" ] || [ "$MODE" = "default" ] || [
         "$(printf '%s' "$tip" | jq -R '.')"
       first=0
     else
-      printf "%-22s %-18s %-10s %-34s %-44s %-30s %-s\n" \
-        "$alias" "$hname" "$user" "$idf" "$fp" "$onep" "$st" >> "$TABLE_TMP"
+      printf "%-26s %-26s %-12s %-32s %-44s %-s\n" \
+        "$alias" "$hname" "$user" "$idf_file" "$onep" "$st" >> "$TABLE_TMP"
       if [ -n "$tip" ]; then
         # keep helper on stderr so it prints before the table
         echo "- $alias: $tip" >&2

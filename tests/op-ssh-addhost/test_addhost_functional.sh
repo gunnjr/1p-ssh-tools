@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Simple dependency-free tests for op-ssh-addhost.sh
-# Usage: ./run_shell_tests.sh
+# Usage: ./test_addhost_functional.sh
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT_DIR/scripts/op-ssh-addhost.sh"
 # Create a portable temporary test directory. On macOS TMPDIR may point to a
 # per-user tmp path that no longer exists (stale). Try a TMPDIR-based mktemp

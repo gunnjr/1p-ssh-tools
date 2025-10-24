@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# op-show-ssh-pub.sh
+usage() {
+  # Print only commented header lines from the first 120 lines, stripping leading '# '
+  sed -n '1,120p' "$0" | sed -n 's/^# \{0,1\}//p'
+}
+
+# op-ssh-show-pubkey.sh
 # Search 1Password for SSH keys by title pattern and (optionally) show the PUBLIC key.
 # - Default vault: Private
 # - Case-insensitive substring/regex match against item.title
@@ -9,14 +14,24 @@ set -euo pipefail
 # - Copies the public key to clipboard (macOS pbcopy) unless --no-copy
 #
 # Usage:
-#   op-show-ssh-pub.sh <pattern> [--vault VAULT] [--list-only] [--no-copy]
+#   op-ssh-show-pubkey.sh <pattern> [--vault VAULT] [--list-only] [--no-copy]
 #
 # Examples:
-#   op-show-ssh-pub.sh sdr-host --list-only
-#   op-show-ssh-pub.sh "media|router" --vault Private
-#   op-show-ssh-pub.sh sdr-host            # prints key (if unique match) and copies to clipboard
+#   op-ssh-show-pubkey.sh sdr-host --list-only
+#   op-ssh-show-pubkey.sh "media|router" --vault Private
+#   op-ssh-show-pubkey.sh sdr-host            # prints key (if unique match) and copies to clipboard
 #
 # Requirements: op (1Password CLI), jq, ssh-keygen (for fingerprint), pbcopy (optional)
+
+# Early help handling (works even without a pattern, and regardless of arg order)
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+  esac
+done
 
 pattern="${1:-}"
 vault="Private"
@@ -39,7 +54,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h | --help)
-      sed -n '1,40p' "$0" | sed 's/^# \{0,1\}//'
+      usage
       exit 0
       ;;
     *)
@@ -50,7 +65,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$pattern" ]]; then
-  echo "Usage: op-show-ssh-pub.sh <pattern> [--vault VAULT] [--list-only] [--no-copy]" >&2
+  echo "Usage: op-ssh-show-pubkey.sh <pattern> [--vault VAULT] [--list-only] [--no-copy]" >&2
   exit 1
 fi
 

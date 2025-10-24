@@ -8,11 +8,30 @@ trap 'echo "ERROR: exit $? at command: \"$BASH_COMMAND\"" >&2' ERR
 # op-ssh-addhost.sh
 # Add/update a host entry in ~/.ssh/config using a 1Password-managed SSH key.
 #
+# Usage:
+#   op-ssh-addhost.sh --host <host> --user <user> [--pub-file <name>.pub] [options]
+#
+# Command-line arguments:
+#   --host <host>            Host pattern (e.g. github.com or homeassistant.local) [required]
+#   --user <user>            SSH user for the host [required]
+#   --pub-file <path>        Local .pub file name or path (default: <host>_<type>.pub)
+#   --hostname <name>        SSH HostName value (DNS or IP); defaults to --host
+#   --vault <name>           1Password vault name (default: Private)
+#   --type <t>               SSH key type when creating new (default: ed25519; options: ed25519|rsa2048|rsa3072|rsa4096)
+#   --auto-alias             If host resolves to IPv4, also upsert a block for the IPv4
+#   --dry-run                Preview changes; do not write files
+#   --yes                    Assume 'yes' to prompts (non-interactive)
+#   --force                  If local .pub exists and mismatches, backup+overwrite without prompt
+#   --ssh-dir <dir>          Specify .ssh directory (default: $HOME/.ssh)
+#   --set-git-signing-key    Set git commit signing key to match this SSH key (and gpg.format=ssh)
+#   -h, --help               Show help and exit
+#
 # Behavior:
 # - Ensures you're signed into 1Password CLI
 # - Ensures a 1Password SSH key item exists ("SSH Key - <host> - <user>")
 # - Retrieves its public key, writes/validates the local .pub file
 # - Upserts one or two Host blocks (hostname and optional IPv4 alias)
+# - If --set-git-signing-key is used, sets git commit signing key to match the SSH key
 #
 # macOS-compatible (no bash 4-only features).
 # -----------------------------------------------------------------------------
@@ -20,25 +39,28 @@ trap 'echo "ERROR: exit $? at command: \"$BASH_COMMAND\"" >&2' ERR
 # -------------------------- Defaults / Globals --------------------------------
 VAULT="Private"
 NEW_TYPE="ed25519" # for new key creation (ed25519 | rsa2048 | rsa3072 | rsa4096)
-CONF_FILE="$HOME/.ssh/config"
+SSH_DIR=""
+CONF_FILE=""
 
 HOST=""      # --host (required)
 HOSTNAME=""  # --hostname (optional; defaults to HOST)
 USER_NAME="" # --user (required)
 PUB_FILE=""  # --pub-file (required local .pub path)
 AUTO_ALIAS=0 # --auto-alias (try to add IPv4 alias block)
+
 DRY_RUN=0    # --dry-run
 YES=0        # --yes (assume "yes" to prompts)
 FORCE=0      # --force (overwrite mismatched local .pub without prompt)
+SET_GIT_SIGNING_KEY=0 # --set-git-signing-key
 
 # 1Password agent socket preferences (macOS first, fallback Linux)
-AGENT_SOCK_MAC="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
-AGENT_SOCK_LNX="$HOME/.1password/agent.sock"
+AGENT_SOCK_NATIVE="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+AGENT_SOCK_FIXED="$HOME/.1password/agent.sock"
 # Prefer macOS socket, then Linux socket, otherwise leave empty
-if [ -S "$AGENT_SOCK_MAC" ]; then
-  AGENT_SOCK="$AGENT_SOCK_MAC"
-elif [ -S "$AGENT_SOCK_LNX" ]; then
-  AGENT_SOCK="$AGENT_SOCK_LNX"
+if [ -S "$AGENT_SOCK_FIXED" ]; then
+  AGENT_SOCK="$AGENT_SOCK_FIXED"
+elif [ -S "$AGENT_SOCK_NATIVE" ]; then
+  AGENT_SOCK="$AGENT_SOCK_NATIVE"
 else
   AGENT_SOCK=""
 fi
@@ -60,37 +82,73 @@ if [ -z "${OPSSH_TEST_MODE:-}" ]; then
   need install
 fi
 
-# -------------------------- Temp files (safe under -u) ------------------------
-TMPA="$(mktemp "${TMPDIR:-/tmp}/opsshA.XXXXXX" 2> /dev/null || mktemp -t opsshA.XXXXXX)"
-TMPB="$(mktemp "${TMPDIR:-/tmp}/opsshB.XXXXXX" 2> /dev/null || mktemp -t opsshB.XXXXXX)"
-TBLK="$(mktemp "${TMPDIR:-/tmp}/opblk.XXXXXX" 2> /dev/null || mktemp -t opblk.XXXXXX)"
-cleanup_tmp() { rm -f "$TMPA" "$TMPB" "$TBLK"; }
-trap cleanup_tmp EXIT
+# -------------------------- Temp files (lazy init) ----------------------------
+# Create temp files only when needed (after argument parsing or on first use).
+init_tempfiles() {
+  # Respect pre-set vars (e.g., in tests) and only create if missing
+  if [ -z "${TMPA:-}" ]; then
+    TMPA="$(mktemp "${TMPDIR:-/tmp}/opsshA.XXXXXX" 2> /dev/null || mktemp -t opsshA.XXXXXX)"
+  fi
+  if [ -z "${TMPB:-}" ]; then
+    TMPB="$(mktemp "${TMPDIR:-/tmp}/opsshB.XXXXXX" 2> /dev/null || mktemp -t opsshB.XXXXXX)"
+  fi
+  if [ -z "${TBLK:-}" ]; then
+    TBLK="$(mktemp "${TMPDIR:-/tmp}/opblk.XXXXXX" 2> /dev/null || mktemp -t opblk.XXXXXX)"
+  fi
 
-# Ensure mktemp succeeded
-if [ -z "${TMPA:-}" ] || [ -z "${TMPB:-}" ] || [ -z "${TBLK:-}" ]; then
-  echo "mktemp failed to create temporary files" >&2
-  exit 2
-fi
+  # Ensure mktemp succeeded
+  if [ -z "${TMPA:-}" ] || [ -z "${TMPB:-}" ] || [ -z "${TBLK:-}" ]; then
+    echo "mktemp failed to create temporary files" >&2
+    exit 2
+  fi
+
+  # Setup cleanup trap once temp files exist
+  cleanup_tmp() { rm -f "${TMPA:-}" "${TMPB:-}" "${TBLK:-}"; }
+  trap cleanup_tmp EXIT
+}
 
 # -------------------------- Function Definitions ------------------------------
 # -------------------------- 1Password sign-in ---------------------------------
 ensure_op() {
-  if op whoami > /dev/null 2>&1; then
-    return 0
+  if command -v op > /dev/null 2>&1; then
+    if op whoami > /dev/null 2>&1; then
+      HAS_OP=1
+      return 0
+    fi
+    echo "1Password CLI: not signed in — attempting 'op signin'..." >&2
+    # Interactive sign-in; user may cancel. Suppress noisy output but keep prompts.
+    if op signin > /dev/null 2>&1; then
+      HAS_OP=1
+      echo "1Password CLI: signed in." >&2
+      return 0
+    else
+      HAS_OP=0
+      echo "1Password CLI: sign-in failed or canceled; proceeding without 1P lookups." >&2
+      return 1
+    fi
+  else
+    HAS_OP=0
+    return 1
   fi
-  cat >&2 << 'MSG'
-1Password CLI: not signed in.
-
-Interactive sign-in cannot be safely performed from this script. Please sign in
-in your current shell so this script can access 1Password items. Example (interactive):
-
-  eval "$(op signin)"
-
-After signing in, re-run this script.
-MSG
-  exit 1
 }
+
+# Original version of this function retained for reference
+# ensure_op() {
+#   if op whoami > /dev/null 2>&1; then
+#     return 0
+#   fi
+#   cat >&2 << 'MSG'
+# 1Password CLI: not signed in.
+# 
+# Interactive sign-in cannot be safely performed from this script. Please sign in
+# in your current shell so this script can access 1Password items. Example (interactive):
+# 
+#   eval "$(op signin)"
+# 
+# After signing in, re-run this script.
+# MSG
+#   exit 1
+# }
 
 # Helper: fingerprint from a public key string
 fp_from_pub() {
@@ -139,15 +197,23 @@ EOF
 }
 
 render_host_block() {
-  # args: host, hostName, user, pubFile
-  local host="$1" hostName="$2" user="$3" pub="$4"
+  # args: host, hostName, user, pubFile, [aliases]
+  local host="$1" hostName="$2" user="$3" pub="$4" aliases="$5"
   : > "$TBLK"
   {
-    echo "Host $host"
+    echo "# Managed by op-ssh-addhost.sh on $(date '+%Y-%m-%d %H:%M:%S')"
+    if [ -n "$aliases" ]; then
+      echo "Host $aliases"
+    else
+      echo "Host $host"
+    fi
     [ -n "$hostName" ] && echo "  HostName $hostName"
     [ -n "$user" ] && echo "  User $user"
     [ -n "$pub" ] && echo "  IdentityFile $pub"
     echo "  IdentitiesOnly yes"
+    if [ -n "${AGENT_SOCK:-}" ]; then
+      echo "  IdentityAgent $AGENT_SOCK"
+    fi
   } >> "$TBLK"
 }
 
@@ -157,34 +223,48 @@ upsert_host_block() {
   awk -v host="$host" -v blkfile="$TBLK" '
     function is_host_line(line) { return (line ~ /^[[:space:]]*Host[[:space:]]+/) }
 
-		{
-			line = $0
-			if (is_host_line(line)) {
-				h = line
-				sub(/^[[:space:]]*Host[[:space:]]+/, "", h)
-				n = split(h, a, /[[:space:]]+/)
-				found = 0
-				for (i = 1; i <= n; i++) if (a[i] == host) found = 1
-				if (found) { skip = 1; next }       # start skipping old block
-				else if (skip) { skip = 0 }         # we just left a block; resume printing
-			}
+    BEGIN {
+      inserted = 0
+    }
 
-			if (skip) {
-				# End skipping if we hit a blank line or a comment; preserve those lines
-				if (line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*#/) {
-					skip = 0
-					print
-				}
-				else next
-			}
+    {
+      line = $0
+      if (!inserted && is_host_line(line) && line ~ /^[[:space:]]*Host[[:space:]]+\*$/) {
+        # Insert new block before the first Host * block
+        while ((getline L < blkfile) > 0) print L
+        close(blkfile)
+        print ""  # blank line after new block
+        inserted = 1
+      }
 
-			if (!skip) print
-		}
+      if (is_host_line(line)) {
+        h = line
+        sub(/^[[:space:]]*Host[[:space:]]+/, "", h)
+        n = split(h, a, /[[:space:]]+/)
+        found = 0
+        for (i = 1; i <= n; i++) if (a[i] == host) found = 1
+        if (found) { skip = 1; next }       # start skipping old block
+        else if (skip) { skip = 0 }         # we just left a block; resume printing
+      }
+
+      if (skip) {
+        # End skipping if we hit a blank line or a comment; preserve those lines
+        if (line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*#/) {
+          skip = 0
+          print
+        }
+        else next
+      }
+
+      if (!skip) print
+    }
 
     END {
-      print ""                              # blank line before new block
-      while ((getline L < blkfile) > 0) print L
-      close(blkfile)
+      if (!inserted) {
+        print ""  # blank line before new block
+        while ((getline L < blkfile) > 0) print L
+        close(blkfile)
+      }
     }
   ' "$in" > "$out"
 }
@@ -236,23 +316,32 @@ if [ -z "${OPSSH_TEST_MODE:-}" ]; then
         FORCE=1
         shift
         ;;
+      --set-git-signing-key)
+        SET_GIT_SIGNING_KEY=1
+        shift
+        ;;
+      --ssh-dir)
+        SSH_DIR="${2:-}"
+        shift 2
+        ;;
       -h | --help)
         cat << EOF
-Usage: $(basename "$0") --host <host> --user <user> --pub-file ~/.ssh/<name>.pub [options]
+Usage: $(basename "$0") --host <host> --user <user> [--pub-file <name>.pub] [options]
 
 Required:
   --host <host>          Host pattern (e.g. github.com or homeassistant.local)
   --user <user>          SSH user for the host
-  --pub-file <path>      Local .pub file path (will be created/validated)
 
 Optional:
+  --pub-file <path>      Local .pub file name or path (default: <host>_<type>.pub)
   --hostname <name>      SSH HostName value (DNS or IP); defaults to --host
   --vault <name>         1Password vault name (default: Private)
-  --type <t>             SSH key type when creating new (ed25519|rsa2048|rsa3072|rsa4096)
+  --type <t>             SSH key type when creating new (default: ed25519; options: ed25519|rsa2048|rsa3072|rsa4096)
   --auto-alias           If host resolves to IPv4, also upsert a block for the IPv4
   --dry-run              Preview changes; do not write files
   --yes                  Assume 'yes' to prompts (non-interactive)
   --force                If local .pub exists and mismatches, backup+overwrite without prompt
+  --ssh-dir <dir>        Specify .ssh directory (default: \$HOME/.ssh)
 EOF
         exit 0
         ;;
@@ -272,20 +361,25 @@ EOF
     echo "Error: --user is required" >&2
     exit 2
   }
-  [ -n "$PUB_FILE" ] || {
-    echo "Error: --pub-file is required" >&2
-    exit 2
-  }
+  # If PUB_FILE is not supplied, set default to <host>_<type>.pub
+  if [ -z "$PUB_FILE" ]; then
+    PUB_FILE="$HOST""_""$NEW_TYPE.pub"
+  fi
   [ -n "$HOSTNAME" ] || HOSTNAME="$HOST"
+
+  # Set default SSH_DIR if not provided
+  if [ -z "$SSH_DIR" ]; then
+    SSH_DIR="$HOME/.ssh"
+  fi
+  mkdir -p "$SSH_DIR"
+  CONF_FILE="$SSH_DIR/config"
 
   # Expand leading ~ in PUB_FILE if present (so dirname and later operations work)
   case "$PUB_FILE" in
     ~/*) PUB_FILE="${PUB_FILE/#\~/$HOME}" ;;
-  esac
-
-  # Also allow callers to pass a literal '$HOME/...' string (quoted); expand it here.
-  case "$PUB_FILE" in
     \$HOME/*) PUB_FILE="${PUB_FILE/#\$HOME/$HOME}" ;;
+    /*) ;; # absolute path, leave as is
+    *) PUB_FILE="$SSH_DIR/$PUB_FILE" ;;
   esac
 
   # -------------------------- 1Password sign-in ---------------------------------
@@ -443,16 +537,20 @@ EOF
   if [ "$AUTO_ALIAS" -eq 1 ]; then
     # Try fast ping on macOS; fall back to dig
     # First, attempt to capture the IPv4 from PING header line.
-    HOST_IPV4="$(ping -c1 "$HOST" 2> /dev/null | sed -n 's/^PING .* (\([0-9.]\+\)).*/\1/p' | head -n1 || true)"
-    if [ -z "$HOST_IPV4" ]; then
-      if command -v dig > /dev/null 2>&1; then
-        HOST_IPV4="$(dig +short "$HOST" A 2> /dev/null | head -n1 || true)"
-      fi
+  HOST_IPV4="$(ping -c1 "$HOST" 2> /dev/null | grep -oE '\([0-9.]+\)' | tr -d '()' | head -n1 || true)"
+  if [ -z "$HOST_IPV4" ]; then
+    if command -v dig > /dev/null 2>&1; then
+      HOST_IPV4="$(dig +short "$HOST" A 2> /dev/null | head -n1 || true)"
     fi
+  fi
     # If still empty, we'll just proceed without alias; not fatal.
   fi
 
+
   # -------------------------- Build new config (dry-run or write) ---------------
+  # Initialize temp files now that arguments are processed
+  init_tempfiles
+
   # Start from existing config (or empty)
   if [ -s "$CONF_FILE" ]; then
     cp -p "$CONF_FILE" "$TMPA"
@@ -463,16 +561,50 @@ EOF
   # Ensure the default block exists (but add only once)
   ensure_default_block "$TMPA"
 
+  # -------------------------- Set git signing key if requested ------------------
+  if [ "$SET_GIT_SIGNING_KEY" -eq 1 ]; then
+    # Extract public key string (ONEP_PUB) and format for git config
+    # Only works for ed25519/rsa keys in OpenSSH format
+    if [ -z "$ONEP_PUB" ] && [ -s "$PUB_FILE" ]; then
+      ONEP_PUB="$(cat "$PUB_FILE" | head -n1)"
+    fi
+    if [ -n "$ONEP_PUB" ]; then
+      # Extract the public key string (e.g., ssh-ed25519 AAAA... user@host)
+      GIT_SIGNING_KEY="$(echo "$ONEP_PUB" | awk '{print $2}')"
+      # Get current git signing key (global)
+      CURRENT_GIT_SIGNING_KEY="$(git config --global --get user.signingkey || true)"
+      # Set gpg.format=ssh if not already
+      CURRENT_GPG_FORMAT="$(git config --global --get gpg.format || true)"
+      if [ "$CURRENT_GPG_FORMAT" != "ssh" ]; then
+        git config --global gpg.format ssh
+        echo "Set git global gpg.format=ssh"
+      fi
+      if [ "$CURRENT_GIT_SIGNING_KEY" != "$GIT_SIGNING_KEY" ]; then
+        git config --global user.signingkey "$GIT_SIGNING_KEY"
+        echo "Set git global user.signingkey to match SSH key ($GIT_SIGNING_KEY)"
+      else
+        echo "Git global user.signingkey already matches this SSH key."
+      fi
+    else
+      echo "Warning: Could not determine SSH public key for git signing key update." >&2
+    fi
+  fi
+
   # Main host block
-  render_host_block "$HOST" "$HOSTNAME" "$USER_NAME" "$PUB_FILE"
+  render_host_block "$HOST" "$HOSTNAME" "$USER_NAME" "$PUB_FILE" ""
   upsert_host_block "$TMPA" "$TMPB" "$HOST"
   mv "$TMPB" "$TMPA"
 
   # Optional IPv4 alias block
   if [ "$AUTO_ALIAS" -eq 1 ] && [ -n "$HOST_IPV4" ] && [ "$HOST_IPV4" != "$HOST" ]; then
-    render_host_block "$HOST_IPV4" "$HOST_IPV4" "$USER_NAME" "$PUB_FILE"
-    upsert_host_block "$TMPA" "$TMPB" "$HOST_IPV4"
+    # Create a single block with both hostname and IP as aliases
+    render_host_block "$HOST" "$HOSTNAME" "$USER_NAME" "$PUB_FILE" "$HOST $HOST_IPV4"
+    upsert_host_block "$TMPA" "$TMPB" "$HOST"
     mv "$TMPB" "$TMPA"
+  else
+  render_host_block "$HOST" "$HOSTNAME" "$USER_NAME" "$PUB_FILE" ""
+  upsert_host_block "$TMPA" "$TMPB" "$HOST"
+  mv "$TMPB" "$TMPA"
   fi
 
   # -------------------------- Output / write ------------------------------------

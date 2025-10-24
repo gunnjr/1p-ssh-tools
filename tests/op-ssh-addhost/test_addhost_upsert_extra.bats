@@ -2,7 +2,7 @@
 
 # Get the directory where the test file is located
 TEST_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-SCRIPT_DIR="$TEST_DIR/../scripts"
+SCRIPT_DIR="$TEST_DIR/../../scripts"
 
 # Source the main script to get access to the upsert_host_block function
 # We need to set OPSSH_TEST_MODE to prevent the script from executing

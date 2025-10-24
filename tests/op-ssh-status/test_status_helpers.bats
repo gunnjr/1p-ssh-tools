@@ -4,7 +4,7 @@
 # Focused: fingerprint comparison and config parsing
 
 TEST_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-SCRIPT_DIR="$TEST_DIR/../scripts"
+SCRIPT_DIR="$TEST_DIR/../../scripts"
 
 setup() {
   TMPROOT=$(mktemp -d)

@@ -4,7 +4,8 @@
 # Focused: pattern matching, key extraction, fingerprint display
 
 TEST_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-SCRIPT_DIR="$TEST_DIR/../scripts"
+ROOT_DIR="$(cd "$TEST_DIR/../.." && pwd)"
+SCRIPT_DIR="$ROOT_DIR/scripts"
 
 setup() {
   TMPROOT=$(mktemp -d)

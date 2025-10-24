@@ -5,7 +5,7 @@
 
 # Test harness variables
 TEST_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-SCRIPT_DIR="$TEST_DIR/../scripts"
+SCRIPT_DIR="$TEST_DIR/../../scripts"
 
 # Prevent main execution when sourcing the script
 export OPSSH_TEST_MODE=1
