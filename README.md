@@ -14,7 +14,7 @@ This repository contains helper scripts designed to simplify managing SSH keys s
 | `scripts/op-ssh-keygen.sh` | Generates or retrieves SSH key pairs in 1Password and exports public keys locally. |
 | `scripts/op-ssh-status.sh` | Displays local SSH configuration, key fingerprints, and 1Password matches. |
 | `scripts/op-ssh-show-pubkey.sh` | Quickly retrieves and displays public keys stored in 1Password. |
-| `scripts/op-ssh-addhost.sh` *(coming soon)* | Creates or reuses 1Password SSH keys, validates local public keys, and updates your SSH config file. |
+| `scripts/op-ssh-addhost.sh` | Adds or updates SSH Host entries in your config using a 1Password-managed SSH key, ensuring key consistency and supporting advanced options. |
 
 All scripts are written for **macOS’s native Bash 3.2** for maximum portability.
 
@@ -43,16 +43,36 @@ All scripts are written for **macOS’s native Bash 3.2** for maximum portabilit
 - Simple utility to retrieve, display, and copy public keys from 1Password.  
 - Useful for quickly deploying keys to remote servers (e.g., `authorized_keys`).
 
-### 🧱 `op-ssh-addhost.sh` *(under development)*
+### 🧱 `op-ssh-addhost.sh`
 
-Planned functionality:
+Adds or updates a Host entry in your `~/.ssh/config` using a 1Password-managed SSH key. Ensures your SSH configuration and public key files are consistent with 1Password, and supports advanced automation and safety features.
 
-- Checks for an existing SSH key in 1Password (creates one if missing).  
-- Validates or generates a matching local `.pub` file.  
-- Confirms the key pair matches between local and 1Password.  
-- Updates your SSH config with the proper `Host`, `IdentityFile`, and `IdentitiesOnly yes`.  
-- Optionally resolves local hostnames to IPs and creates alias blocks.  
-- Supports `--dry-run`, `--yes`, and `--auto-alias` modes.
+**Key features:**
+
+- Ensures you are signed into the 1Password CLI.
+- Finds or creates a 1Password SSH key item (`SSH Key - <host> - <user>`).
+- Retrieves the public key from 1Password and writes or validates the local `.pub` file.
+- If the local `.pub` file exists but does not match 1Password, prompts to back up and overwrite (or does so automatically with `--force`/`--yes`).
+- Upserts a `Host` block in your SSH config, setting `HostName`, `User`, `IdentityFile`, and `IdentitiesOnly yes`.
+- Optionally adds an alias block for the host's IPv4 address (`--auto-alias`).
+- Supports `--dry-run` (preview changes), `--yes` (non-interactive), `--force` (overwrite mismatches), and custom SSH directory or config locations.
+- Optionally sets your global git commit signing key to match this SSH key (`--set-git-signing-key`).
+- macOS and Linux compatible; no Bash 4+ features required.
+
+**Example usage:**
+
+```bash
+# Add or update a host entry using a 1Password-managed key
+scripts/op-ssh-addhost.sh --host github.com --user git
+
+# Add with a specific public key file and auto-alias for IPv4
+scripts/op-ssh-addhost.sh --host myserver.local --user admin --auto-alias --pub-file ~/.ssh/myserver_ed25519.pub
+
+# Preview changes without writing files
+scripts/op-ssh-addhost.sh --host github.com --user git --dry-run
+```
+
+Run with `-h` or `--help` for all options and details.
 
 ---
 
@@ -122,13 +142,22 @@ scripts/op-ssh-show-pubkey.sh github.com
 
 ---
 
-## 🧠 Roadmap
+## 🧪 Tests
 
-| Version | Milestone | Description |
-|----------|------------|-------------|
-| `v0.4-docs` | Documentation Refresh | Updated README, new structure, new naming convention |
-| `v0.5-addhost` | AddHost Integration | Full implementation of `op-ssh-addhost.sh` |
-| `v0.6-bootstrap` | Bootstrap Integration | Auto-deploy scripts to `~/bin` and integrate into bootstrap process |
+Automated and helper tests are provided for all major scripts. See [tests/README.md](tests/README.md) for details on test structure, dependencies, and how to run both Bats and Bash-based tests.
+
+## 🧹 Linting
+
+Shell script linting is provided by [`scripts/lint.sh`](scripts/lint.sh), which runs `shellcheck` (and optionally `shfmt`) on all scripts. See [docs/linting.md](docs/linting.md) for usage and setup instructions.
+
+All contributors are encouraged to lint their code before submitting changes.
+
+## 🗒️ Release History
+
+| Version | Date         | Notes                                                      |
+|---------|--------------|------------------------------------------------------------|
+| 1.0.1   | 2025-10-24   | Documentation and README improvements, test/lint docs added |
+| 1.0.0   | 2025-10-??   | Initial stable release: all core scripts and test suite     |
 
 ---
 
