@@ -10,6 +10,7 @@ This directory contains automated and helper tests for the 1Password SSH Tools p
 - `op-ssh-status/` – Tests for `op-ssh-status.sh`
 
 Each subdirectory may contain:
+
 - `*_functional.sh` – End-to-end or integration tests (Bash)
 - `*_helpers.bats` – Unit or helper tests (Bats)
 - `*_upsert.bats` – Specific logic/unit tests (Bats)
